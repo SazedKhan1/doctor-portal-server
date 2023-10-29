@@ -1,9 +1,11 @@
 const express = require('express')
 const cors = require('cors');
 const { MongoClient, ServerApiVersion } = require('mongodb');
+const { ObjectId } = require('mongodb');
 const jwt = require('jsonwebtoken');
 const port = process.env.PORT || 5000;
 require('dotenv').config();
+const stripe = require("stripe")(process.env.Secret_Key);
 
 const app = express()
 
@@ -53,6 +55,19 @@ async function run() {
         const appointmentOptionCollection = client.db('doctors-portal').collection('appointment-collections')
         const bookingCollections = client.db('doctors-portal').collection('bookings')
         const userCollection = client.db('doctors-portal').collection('users')
+        const doctorsCollection = client.db('doctors-portal').collection('doctors')
+
+
+        const verifyAdmin = async (req, res, next) => {
+            const decodedEmail = req.decoded.email;
+            const query = { email: decodedEmail };
+            const user = await userCollection.findOne(query);
+
+            if (user?.role !== 'admin') {
+                return res.status(403).send({ message: 'forbidden access' })
+            }
+            next();
+        }
 
 
         app.get('/appointmentOptions', async (req, res) => {
@@ -113,11 +128,104 @@ async function run() {
             res.send(result)
         })
 
+        app.get('/bookings/:id', async (req, res) => {
+            const id = req.params.id
+            const query = { _id: new ObjectId(id) }
+            const result = await bookingCollections.findOne(query)
+            res.send(result)
+        });
+
+
+        // Payment api
+
+        app.post('/create-payment-intent', async (req, res) => {
+            const booking = req.body
+            const price = booking.price
+            const amount = price * 100
+
+            const paymentIntent = await stripe.paymentIntents.create({
+                currency: 'usd',
+                amount: amount,
+                "payment_method_type": [
+                    "card"
+                ]
+            })
+            res.send({
+                clientSecret: paymentIntent.client_secret,
+            });
+        })
+
+
+
+        app.get('/users', async (req, res) => {
+            const query = {}
+            const users = await userCollection.find(query).toArray()
+            res.send(users)
+        })
+
+        app.get('/users/admin/:email', async (req, res) => {
+            const email = req.params.email;
+            const query = { email }
+            const user = await userCollection.findOne(query);
+            res.send({ isAdmin: user?.role === 'admin' });
+        })
+
         app.post('/users', async (req, res) => {
             const user = req.body
             const result = await userCollection.insertOne(user)
             res.send(result)
 
+        })
+
+        app.put('/users/admin/:id', verifyJWT, verifyAdmin, async (req, res) => {
+
+            const id = req.params.id;
+            const filter = { _id: new ObjectId(id) }
+            const options = { upsert: true };
+            const updatedDoc = {
+                $set: {
+                    role: 'admin'
+                }
+            }
+            const result = await userCollection.updateOne(filter, updatedDoc, options);
+            res.send(result);
+        })
+
+        // app.get('/addPrice', async (req, res) => {
+        //     const filter = {};
+        //     const options = { upsert: true };
+        //     const updatedDoc = {
+        //         $set: {
+        //             price: 99,
+        //         }
+        //     }
+        //     const result = await appointmentOptionCollection.updateMany(filter, updatedDoc, options)
+        //     res.send(result)
+        // })
+
+
+        app.get('/appointmentSpeciality', async (req, res) => {
+            const query = {}
+            const result = await appointmentOptionCollection.find(query).project({ name: 1 }).toArray()
+            res.send(result)
+        })
+
+        app.get('/doctors', verifyJWT, verifyAdmin, async (req, res) => {
+            const query = {}
+            const result = await doctorsCollection.find(query).toArray()
+            res.send(result);
+        })
+
+        app.post('/doctors', verifyJWT, verifyAdmin, async (req, res) => {
+            const doctor = req.body
+            const result = await doctorsCollection.insertOne(doctor)
+            res.send(result)
+        })
+        app.delete('/doctors/:id', verifyJWT, verifyAdmin, async (req, res) => {
+            const id = req.params.id;
+            const filter = { _id: new ObjectId(id) };
+            const result = await doctorsCollection.deleteOne(filter);
+            res.send(result);
         })
 
 
